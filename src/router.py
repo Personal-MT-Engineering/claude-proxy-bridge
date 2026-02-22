@@ -1,11 +1,15 @@
-"""Smart routing engine — analyzes requests and picks the best model with fallback chains."""
+"""Smart routing engine — analyzes requests and picks the best model with fallback chains.
+
+Routing tables are built dynamically from bridge.yaml (or defaults) at module load.
+No hardcoded model references.
+"""
 
 import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
 
-from .config import HAIKU, MODEL_MAP, OPUS, SONNET, ModelConfig, settings
+from .config import MODEL_MAP, ModelConfig, settings
 from .openai_types import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
@@ -174,25 +178,63 @@ def classify_scenario(request: ChatCompletionRequest) -> tuple[Scenario, str]:
     return Scenario.MODERATE, f"General request (tokens={token_count}, msgs={message_count})"
 
 
-# --- Fallback chains ---
+# ---------------------------------------------------------------------------
+# Build routing tables from config (dynamic, not hardcoded)
+# ---------------------------------------------------------------------------
 
-# Default fallback chains per scenario (best → worst for that scenario)
-DEFAULT_FALLBACK_CHAINS: dict[Scenario, list[ModelConfig]] = {
-    Scenario.COMPLEX:         [OPUS, SONNET, HAIKU],
-    Scenario.CODE_GENERATION: [SONNET, OPUS, HAIKU],
-    Scenario.LONG_CONTEXT:    [OPUS, SONNET],
-    Scenario.MODERATE:        [SONNET, HAIKU, OPUS],
-    Scenario.SIMPLE:          [HAIKU, SONNET],
-}
+def _build_routing_tables() -> tuple[
+    dict[Scenario, ModelConfig],
+    dict[Scenario, list[ModelConfig]],
+]:
+    """Build scenario→model and scenario→fallback_chain maps from settings.
 
-# Default primary model per scenario
-DEFAULT_SCENARIO_MODELS: dict[Scenario, ModelConfig] = {
-    Scenario.COMPLEX:         OPUS,
-    Scenario.CODE_GENERATION: SONNET,
-    Scenario.LONG_CONTEXT:    OPUS,
-    Scenario.MODERATE:        SONNET,
-    Scenario.SIMPLE:          HAIKU,
-}
+    Reads settings.routing_scenario_models and settings.routing_fallback_chains,
+    resolving model keys via MODEL_MAP.
+    """
+    scenario_models: dict[Scenario, ModelConfig] = {}
+    fallback_chains: dict[Scenario, list[ModelConfig]] = {}
+
+    # Map scenario string keys to enum values
+    scenario_key_map = {s.value: s for s in Scenario}
+
+    # Build scenario → primary model
+    for key, model_key in settings.routing_scenario_models.items():
+        scenario = scenario_key_map.get(key)
+        if not scenario:
+            logger.warning("Unknown routing scenario: %s", key)
+            continue
+        mc = MODEL_MAP.get(model_key)
+        if not mc:
+            logger.warning("Unknown model '%s' in scenario_models[%s]", model_key, key)
+            continue
+        scenario_models[scenario] = mc
+
+    # Build scenario → fallback chain
+    for key, chain_keys in settings.routing_fallback_chains.items():
+        scenario = scenario_key_map.get(key)
+        if not scenario:
+            continue
+        chain: list[ModelConfig] = []
+        for model_key in chain_keys:
+            mc = MODEL_MAP.get(model_key)
+            if mc:
+                chain.append(mc)
+            else:
+                logger.warning("Unknown model '%s' in fallback_chains[%s]", model_key, key)
+        if chain:
+            fallback_chains[scenario] = chain
+
+    return scenario_models, fallback_chains
+
+
+# Build at module load time (after settings are ready)
+DEFAULT_SCENARIO_MODELS, DEFAULT_FALLBACK_CHAINS = _build_routing_tables()
+
+# Determine a sensible default model (first model in the list, or the "moderate" model)
+_FALLBACK_MODEL = (
+    DEFAULT_SCENARIO_MODELS.get(Scenario.MODERATE)
+    or (settings.models[0] if settings.models else None)
+)
 
 
 def get_fallback_chain(scenario: Scenario) -> list[ModelConfig]:
@@ -209,7 +251,12 @@ def get_fallback_chain(scenario: Scenario) -> list[ModelConfig]:
         if chain:
             return chain
 
-    return list(DEFAULT_FALLBACK_CHAINS.get(scenario, [SONNET, HAIKU]))
+    chain = DEFAULT_FALLBACK_CHAINS.get(scenario)
+    if chain:
+        return list(chain)
+
+    # Ultimate fallback: all configured models
+    return list(settings.models)
 
 
 def get_scenario_model(scenario: Scenario) -> ModelConfig:
@@ -221,7 +268,14 @@ def get_scenario_model(scenario: Scenario) -> ModelConfig:
             return mc
         logger.warning("Unknown model in scenario override: %s", override)
 
-    return DEFAULT_SCENARIO_MODELS.get(scenario, SONNET)
+    mc = DEFAULT_SCENARIO_MODELS.get(scenario)
+    if mc:
+        return mc
+
+    # Ultimate fallback
+    if _FALLBACK_MODEL:
+        return _FALLBACK_MODEL
+    return settings.models[0]
 
 
 # --- Main routing function ---

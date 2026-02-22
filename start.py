@@ -40,13 +40,16 @@ async def run_server(app, host: str, port: int, name: str) -> None:
 async def main_async() -> None:
     logger = logging.getLogger(__name__)
 
-    # Verify claude CLI is available
-    try:
-        cli_path = settings.resolve_claude_cli()
-        logger.info("Found Claude CLI: %s", cli_path)
-    except FileNotFoundError as e:
-        logger.error(str(e))
-        sys.exit(1)
+    # Only verify Claude CLI if any provider needs it
+    if settings.has_claude_cli_provider():
+        try:
+            cli_path = settings.resolve_claude_cli()
+            logger.info("Found Claude CLI: %s", cli_path)
+        except FileNotFoundError as e:
+            logger.error(str(e))
+            sys.exit(1)
+    else:
+        logger.info("No Claude CLI providers configured — skipping CLI check")
 
     # Create apps
     proxy_apps = []
@@ -66,8 +69,9 @@ async def main_async() -> None:
     logger.info("Claude Proxy Bridge is starting up!")
     logger.info("=" * 60)
     for mc in settings.models:
-        logger.info("  %-8s → http://%s:%d/v1/chat/completions", mc.name.title(), settings.host, mc.port)
-    logger.info("  %-8s → ws://%s:%d/ws", "Bridge", settings.host, settings.bridge_port)
+        label = f"{mc.name.title()} ({mc.provider.key})"
+        logger.info("  %-30s → http://%s:%d/v1/chat/completions", label, settings.host, mc.port)
+    logger.info("  %-30s → ws://%s:%d/ws", "Bridge (Smart Router)", settings.host, settings.bridge_port)
     logger.info("=" * 60)
 
     # Wait for all servers (they run forever until cancelled)

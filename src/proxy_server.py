@@ -12,7 +12,6 @@ from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconne
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .claude_runner import run_claude, stream_claude
 from .config import ModelConfig, settings
 from .openai_types import (
     ChatCompletionChunk,
@@ -22,16 +21,16 @@ from .openai_types import (
     ModelListResponse,
 )
 from .router import RoutingDecision, route_request
+from .runners import run_model, stream_model
 
 logger = logging.getLogger(__name__)
 
 
 async def run_with_fallback(
-    prompt: str,
-    system_prompt: str | None,
+    request: ChatCompletionRequest,
     decision: RoutingDecision,
 ) -> tuple[str, ModelConfig]:
-    """Run Claude CLI with fallback chain. Returns (response_text, model_used).
+    """Run a model with fallback chain. Returns (response_text, model_used).
 
     Tries the primary model first. On failure, walks down the fallback chain
     up to `max_fallback_attempts` times.
@@ -47,11 +46,7 @@ async def run_with_fallback(
                     "Fallback attempt %d/%d: trying %s (after %s failed)",
                     i, max_attempts, mc.name, chain[i - 1].name,
                 )
-            text = await run_claude(
-                prompt=prompt,
-                model_id=mc.model_id,
-                system_prompt=system_prompt,
-            )
+            text = await run_model(request, mc)
             return text, mc
         except RuntimeError as e:
             last_error = e
@@ -65,11 +60,10 @@ async def run_with_fallback(
 
 
 async def stream_with_fallback(
-    prompt: str,
-    system_prompt: str | None,
+    request: ChatCompletionRequest,
     decision: RoutingDecision,
 ):
-    """Stream from Claude CLI with fallback. Yields (text_chunk, model_config).
+    """Stream from a model with fallback. Yields (text_chunk, model_config).
 
     If the primary model fails before producing any output, tries the next
     model in the fallback chain. Once streaming has started, errors are
@@ -87,11 +81,7 @@ async def stream_with_fallback(
                     i, max_attempts, mc.name,
                 )
             started = False
-            async for text in stream_claude(
-                prompt=prompt,
-                model_id=mc.model_id,
-                system_prompt=system_prompt,
-            ):
+            async for text in stream_model(request, mc):
                 started = True
                 yield text, mc
 
@@ -117,7 +107,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
     """Create a FastAPI app for a specific model."""
     app = FastAPI(
         title=f"Claude Proxy - {model_config.name.title()}",
-        description=f"OpenAI-compatible proxy for Claude {model_config.name.title()} via Claude Code CLI",
+        description=f"OpenAI-compatible proxy for {model_config.name.title()} via Claude Code CLI",
         version="1.0.0",
     )
 
@@ -156,6 +146,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
             "model": model_config.model_id,
             "name": model_config.name,
             "port": model_config.port,
+            "provider": model_config.provider.key,
             "smart_routing": settings.smart_routing_enabled,
         }
 
@@ -174,8 +165,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
     ):
         _check_auth(authorization)
 
-        system_prompt, prompt = request.to_prompt()
-        if not prompt:
+        if not any(m.content for m in request.messages):
             raise HTTPException(status_code=400, detail="No prompt content in messages")
 
         decision = _resolve_routing(request)
@@ -187,7 +177,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
 
         if request.stream:
             return StreamingResponse(
-                _stream_sse(prompt, system_prompt, decision),
+                _stream_sse(request, decision),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -199,7 +189,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
         # Non-streaming with fallback
         async with _semaphore:
             try:
-                text, used_model = await run_with_fallback(prompt, system_prompt, decision)
+                text, used_model = await run_with_fallback(request, decision)
             except RuntimeError as e:
                 raise HTTPException(status_code=502, detail=str(e))
 
@@ -208,7 +198,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
         resp.model = used_model.model_id
         return resp
 
-    async def _stream_sse(prompt: str, system_prompt: str | None, decision: RoutingDecision):
+    async def _stream_sse(request: ChatCompletionRequest, decision: RoutingDecision):
         """Generate SSE stream with fallback support."""
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         actual_model = decision.model.model_id
@@ -219,7 +209,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
 
         async with _semaphore:
             try:
-                async for text, used_mc in stream_with_fallback(prompt, system_prompt, decision):
+                async for text, used_mc in stream_with_fallback(request, decision):
                     actual_model = used_mc.model_id
                     chunk = ChatCompletionChunk.text_chunk(text, actual_model, chunk_id)
                     yield f"data: {chunk.model_dump_json()}\n\n"
@@ -253,8 +243,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
                     await ws.send_json({"type": "error", "content": f"Invalid request: {e}"})
                     continue
 
-                system_prompt, prompt = request.to_prompt()
-                if not prompt:
+                if not any(m.content for m in request.messages):
                     await ws.send_json({"type": "error", "content": "Empty prompt"})
                     continue
 
@@ -275,7 +264,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
                         actual_model = decision.model
                         try:
                             async for text, used_mc in stream_with_fallback(
-                                prompt, system_prompt, decision
+                                request, decision
                             ):
                                 actual_model = used_mc
                                 full_text.append(text)
@@ -294,7 +283,7 @@ def create_proxy_app(model_config: ModelConfig) -> FastAPI:
                     async with _semaphore:
                         try:
                             text, used_model = await run_with_fallback(
-                                prompt, system_prompt, decision
+                                request, decision
                             )
                         except RuntimeError as e:
                             await ws.send_json({"type": "error", "content": str(e)})

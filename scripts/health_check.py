@@ -20,29 +20,32 @@ async def check_endpoint(client: httpx.AsyncClient, name: str, url: str) -> bool
         if resp.status_code == 200:
             data = resp.json()
             status = data.get("status", "unknown")
-            print(f"  [OK]   {name:20s} → {url}  (status: {status})")
+            provider = data.get("provider", "")
+            extra = f", provider: {provider}" if provider else ""
+            print(f"  [OK]   {name:30s} → {url}  (status: {status}{extra})")
             return True
         else:
-            print(f"  [FAIL] {name:20s} → {url}  (HTTP {resp.status_code})")
+            print(f"  [FAIL] {name:30s} → {url}  (HTTP {resp.status_code})")
             return False
     except httpx.ConnectError:
-        print(f"  [DOWN] {name:20s} → {url}  (connection refused)")
+        print(f"  [DOWN] {name:30s} → {url}  (connection refused)")
         return False
     except httpx.TimeoutException:
-        print(f"  [SLOW] {name:20s} → {url}  (timeout)")
+        print(f"  [SLOW] {name:30s} → {url}  (timeout)")
         return False
     except Exception as e:
-        print(f"  [ERR]  {name:20s} → {url}  ({e})")
+        print(f"  [ERR]  {name:30s} → {url}  ({e})")
         return False
 
 
 async def main() -> None:
     print("Claude Proxy Bridge — Health Check")
-    print("=" * 60)
+    print("=" * 70)
 
     endpoints = []
     for mc in settings.models:
-        endpoints.append((f"{mc.name.title()} Proxy", f"http://{settings.host}:{mc.port}/health"))
+        label = f"{mc.name.title()} ({mc.provider.key})"
+        endpoints.append((label, f"http://{settings.host}:{mc.port}/health"))
     endpoints.append(("WebSocket Bridge", f"http://{settings.host}:{settings.bridge_port}/health"))
 
     async with httpx.AsyncClient() as client:
@@ -50,7 +53,7 @@ async def main() -> None:
             *[check_endpoint(client, name, url) for name, url in endpoints]
         )
 
-    print("=" * 60)
+    print("=" * 70)
 
     ok_count = sum(results)
     total = len(results)
@@ -74,11 +77,11 @@ async def main() -> None:
                 if resp.status_code == 200:
                     data = resp.json()
                     models = [m["id"] for m in data.get("data", [])]
-                    print(f"  {mc.name.title():8s} → {models}")
+                    print(f"  {mc.name.title():12s} ({mc.provider.key:10s}) → {models}")
                 else:
-                    print(f"  {mc.name.title():8s} → HTTP {resp.status_code}")
+                    print(f"  {mc.name.title():12s} ({mc.provider.key:10s}) → HTTP {resp.status_code}")
             except Exception as e:
-                print(f"  {mc.name.title():8s} → Error: {e}")
+                print(f"  {mc.name.title():12s} ({mc.provider.key:10s}) → Error: {e}")
 
     sys.exit(0 if ok_count == total else 1)
 

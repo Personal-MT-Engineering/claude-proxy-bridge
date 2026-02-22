@@ -29,7 +29,7 @@ def create_bridge_app() -> FastAPI:
     """Create the central WebSocket bridge FastAPI app."""
     app = FastAPI(
         title="Claude Proxy Bridge - Smart Router",
-        description="Routes requests to the appropriate Claude model proxy with smart routing and fallback",
+        description="Routes requests to the appropriate model proxy with smart routing and fallback",
         version="1.0.0",
     )
 
@@ -91,8 +91,7 @@ def create_bridge_app() -> FastAPI:
         """OpenAI-compatible chat endpoint on the bridge — smart routes by default."""
         _check_auth(authorization)
 
-        system_prompt, prompt = request.to_prompt()
-        if not prompt:
+        if not any(m.content for m in request.messages):
             raise HTTPException(status_code=400, detail="No prompt content in messages")
 
         decision = _resolve_routing(request)
@@ -104,7 +103,7 @@ def create_bridge_app() -> FastAPI:
 
         if request.stream:
             return StreamingResponse(
-                _stream_sse(prompt, system_prompt, decision),
+                _stream_sse(request, decision),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -115,13 +114,13 @@ def create_bridge_app() -> FastAPI:
 
         async with _semaphore:
             try:
-                text, used_model = await run_with_fallback(prompt, system_prompt, decision)
+                text, used_model = await run_with_fallback(request, decision)
             except RuntimeError as e:
                 raise HTTPException(status_code=502, detail=str(e))
 
         return ChatCompletionResponse.from_text(text, used_model.model_id)
 
-    async def _stream_sse(prompt: str, system_prompt: str | None, decision: RoutingDecision):
+    async def _stream_sse(request: ChatCompletionRequest, decision: RoutingDecision):
         """SSE stream with smart routing and fallback."""
         import uuid
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -132,7 +131,7 @@ def create_bridge_app() -> FastAPI:
 
         async with _semaphore:
             try:
-                async for text, used_mc in stream_with_fallback(prompt, system_prompt, decision):
+                async for text, used_mc in stream_with_fallback(request, decision):
                     actual_model = used_mc.model_id
                     chunk = ChatCompletionChunk.text_chunk(text, actual_model, chunk_id)
                     yield f"data: {chunk.model_dump_json()}\n\n"
@@ -167,8 +166,7 @@ def create_bridge_app() -> FastAPI:
                     await ws.send_json({"type": "error", "content": f"Invalid request: {e}"})
                     continue
 
-                system_prompt, prompt = request.to_prompt()
-                if not prompt:
+                if not any(m.content for m in request.messages):
                     await ws.send_json({"type": "error", "content": "Empty prompt"})
                     continue
 
@@ -191,7 +189,7 @@ def create_bridge_app() -> FastAPI:
                         actual_model = decision.model
                         try:
                             async for text, used_mc in stream_with_fallback(
-                                prompt, system_prompt, decision
+                                request, decision
                             ):
                                 actual_model = used_mc
                                 full_text.append(text)
@@ -210,7 +208,7 @@ def create_bridge_app() -> FastAPI:
                     async with _semaphore:
                         try:
                             text, used_model = await run_with_fallback(
-                                prompt, system_prompt, decision
+                                request, decision
                             )
                         except RuntimeError as e:
                             await ws.send_json({"type": "error", "content": str(e)})

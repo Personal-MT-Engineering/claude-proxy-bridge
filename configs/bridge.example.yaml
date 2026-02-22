@@ -1,0 +1,143 @@
+# Claude Proxy Bridge — Multi-Provider Configuration
+#
+# Copy this file to the project root as bridge.yaml and customize.
+# If bridge.yaml is absent, the bridge defaults to 3 Claude CLI models
+# (Opus:5001, Sonnet:5002, Haiku:5003) — fully backward-compatible.
+#
+# API keys can reference environment variables with ${VAR_NAME} syntax.
+
+providers:
+  claude-cli:
+    type: claude_cli
+    cli_path: ""  # leave empty for auto-detection
+
+  # openai:
+  #   type: http
+  #   base_url: "https://api.openai.com/v1"
+  #   api_key: "${OPENAI_API_KEY}"
+
+  # anthropic-api:
+  #   type: http
+  #   base_url: "https://api.anthropic.com/v1"
+  #   api_key: "${ANTHROPIC_API_KEY}"
+  #   extra_headers:
+  #     anthropic-version: "2023-06-01"
+
+  # deepseek:
+  #   type: http
+  #   base_url: "https://api.deepseek.com/v1"
+  #   api_key: "${DEEPSEEK_API_KEY}"
+
+  # gemini:
+  #   type: http
+  #   base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  #   api_key: "${GEMINI_API_KEY}"
+
+  # ollama:
+  #   type: http
+  #   base_url: "http://localhost:11434/v1"
+  #   api_key: "ollama"
+
+  # openrouter:
+  #   type: http
+  #   base_url: "https://openrouter.ai/api/v1"
+  #   api_key: "${OPENROUTER_API_KEY}"
+
+  # groq:
+  #   type: http
+  #   base_url: "https://api.groq.com/openai/v1"
+  #   api_key: "${GROQ_API_KEY}"
+
+  # together:
+  #   type: http
+  #   base_url: "https://api.together.xyz/v1"
+  #   api_key: "${TOGETHER_API_KEY}"
+
+  # mistral:
+  #   type: http
+  #   base_url: "https://api.mistral.ai/v1"
+  #   api_key: "${MISTRAL_API_KEY}"
+
+  # custom:
+  #   type: http
+  #   base_url: "http://your-server:8080/v1"
+  #   api_key: "${CUSTOM_API_KEY}"
+
+models:
+  opus:
+    provider: claude-cli
+    model_id: "claude-opus-4-6"
+    port: 5001
+    context_window: 200000
+    max_tokens: 16384
+
+  sonnet:
+    provider: claude-cli
+    model_id: "claude-sonnet-4-6"
+    port: 5002
+    context_window: 200000
+    max_tokens: 16384
+
+  haiku:
+    provider: claude-cli
+    model_id: "claude-haiku-4-5-20251001"
+    port: 5003
+    context_window: 200000
+    max_tokens: 16384
+
+  # gpt-4o:
+  #   provider: openai
+  #   model_id: "gpt-4o"
+  #   port: 5004
+  #   context_window: 128000
+  #   max_tokens: 16384
+
+  # gpt-4o-mini:
+  #   provider: openai
+  #   model_id: "gpt-4o-mini"
+  #   port: 5005
+  #   context_window: 128000
+  #   max_tokens: 16384
+
+  # deepseek-chat:
+  #   provider: deepseek
+  #   model_id: "deepseek-chat"
+  #   port: 5006
+  #   context_window: 128000
+  #   max_tokens: 8192
+
+  # deepseek-reasoner:
+  #   provider: deepseek
+  #   model_id: "deepseek-reasoner"
+  #   port: 5007
+  #   context_window: 128000
+  #   max_tokens: 8192
+
+  # gemini-flash:
+  #   provider: gemini
+  #   model_id: "gemini-2.5-flash"
+  #   port: 5008
+  #   context_window: 1000000
+  #   max_tokens: 8192
+
+  # llama3:
+  #   provider: ollama
+  #   model_id: "llama3"
+  #   port: 5009
+  #   context_window: 8192
+  #   max_tokens: 4096
+
+routing:
+  scenario_models:
+    complex: opus
+    code: sonnet
+    long: opus
+    moderate: sonnet
+    simple: haiku
+
+  fallback_chains:
+    complex: [opus, sonnet, haiku]
+    code: [sonnet, opus, haiku]
+    long: [opus, sonnet]
+    moderate: [sonnet, haiku, opus]
+    simple: [haiku, sonnet]
