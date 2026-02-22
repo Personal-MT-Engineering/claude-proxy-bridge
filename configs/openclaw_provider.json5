@@ -1,0 +1,75 @@
+{
+  // OpenClaw custom provider configuration for Claude Proxy Bridge
+  // Merge this into your OpenClaw config file or place in the providers directory.
+  //
+  // Usage: copy to your OpenClaw installation's config, e.g.:
+  //   ~/.openclaw/providers/claude-proxy.json5
+  // Or merge into your main config under the "models" key.
+
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "claude-proxy-opus": {
+        "baseUrl": "http://127.0.0.1:5001/v1",
+        "apiKey": "local-proxy",
+        "api": "openai-completions",
+        "models": [{
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6 (Local Proxy)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        }]
+      },
+      "claude-proxy-sonnet": {
+        "baseUrl": "http://127.0.0.1:5002/v1",
+        "apiKey": "local-proxy",
+        "api": "openai-completions",
+        "models": [{
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6 (Local Proxy)",
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        }]
+      },
+      "claude-proxy-haiku": {
+        "baseUrl": "http://127.0.0.1:5003/v1",
+        "apiKey": "local-proxy",
+        "api": "openai-completions",
+        "models": [{
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5 (Local Proxy)",
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        }]
+      },
+      // Smart router — auto-selects the best model per request with fallback
+      "claude-proxy-auto": {
+        "baseUrl": "http://127.0.0.1:5000/v1",
+        "apiKey": "local-proxy",
+        "api": "openai-completions",
+        "models": [{
+          "id": "auto",
+          "name": "Claude Auto (Smart Router)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        }]
+      }
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "models": {
+        // Use smart router for all tasks — it picks Opus/Sonnet/Haiku automatically
+        "large": "claude-proxy-auto/auto",
+        "small": "claude-proxy-haiku/claude-haiku-4-5"
+      }
+    }
+  }
+}
